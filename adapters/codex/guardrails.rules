@@ -1,0 +1,9 @@
+# Supplemental native escalation rules, not arbitrary shell or filesystem policy.
+# No allow rules. These apply on Codex's native execution policy path.
+prefix_rule(pattern = ["git", "reset", "--hard"], decision = "forbidden",
+            justification = "Preserve existing work; inspect status and use a reversible edit.",
+            match = ["git reset --hard HEAD"], not_match = ["git status"])
+prefix_rule(pattern = ["git", "clean"], decision = "forbidden",
+            justification = "Inspect untracked work; remove only explicitly reviewed targets.")
+prefix_rule(pattern = ["git", "push"], decision = "prompt",
+            justification = "Review remote effects using the host approval flow.")

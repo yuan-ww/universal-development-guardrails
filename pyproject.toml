@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "universal-development-guardrails"
+version = "0.2.0.dev0"
+description = "Deterministic, host-aware development agent guardrails"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+dependencies = []
+
+[project.scripts]
+udg = "guardrails.cli:main"
+
+[tool.setuptools]
+packages = ["guardrails"]
+
+[tool.setuptools.data-files]
+"share/universal-development-guardrails" = ["SKILL.md", "LICENSE"]
+"share/universal-development-guardrails/references" = ["references/risk-boundaries.md"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "S"]
+ignore = ["S101", "S603", "S607"]
