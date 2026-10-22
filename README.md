@@ -114,11 +114,8 @@ python3.11 -I guardrails/runner.py uninstall-skill --workspace "/absolute/path/t
 
 卸载会校验清单；遇到用户修改、额外文件或 symlink 会拒绝删除。先保存自定义内容，不要强制清理。审计目录和父目录保留。升级同样先备份、校验，再保守卸载重装或选择新目录，不静默覆盖。
 
-## 支持范围与重要限制
+## 限制
 
-- **Advisory：** Skill 仅指导行为；**Audit-only：** OBSERVE 仅观察；**Enforced：** 仅指已实测、正常运行的 Codex Hook 指定拒绝链路；其他集成保留 **Unverified** 标记。完整[能力矩阵](docs/platforms.md)与[验证证据](docs/verification.md)另列。
-- **外层 fail-open：** 已测 Codex Hook 未受信、崩溃、超时或输出异常时，工具可能继续执行。内部错误处理不能弥补这个宿主缺口。
-- **误拦截明显：** Codex 0.160.0 Hook 缺少可信的实际工具 workdir；限定样本中 PROTECT 误拦截 12 条正常开发命令中的 11 条。不会通过猜目录或扩大危险允许列表强行放行，见[实测数据](docs/development-measurements.md)。
 - **审批与覆盖有限：** Codex 的 REQUIRE_APPROVAL 在拦截模式下转为拒绝；Claude 真实审批未验证。未经过 Hook 的工具、子进程副作用和其他旁路不受本项目控制。
 - **不是系统沙箱：** 路径检查存在竞态、硬链接和平台差异；无法抵御可修改自身 Hook/策略的同权限进程。文件与网络执行边界仍依赖宿主 Sandbox 和 OS 权限。
 - **并发审计仍有已知锁冲突：** 并发写入 SQLite 时仍可能出现锁冲突。OBSERVE 审计失败提示；仍能运行的 PROTECT / STRICT Hook 拒绝。不要将审计或此预览版视为可靠安全隔离。
@@ -133,13 +130,6 @@ python3.11 -m unittest discover -s tests -v
 
 此外可阅读[快速安装、验证与卸载](docs/quickstart.md)、[架构](docs/architecture.md)、[安全模型](docs/security-model.md)及[验证方式与效果边界](docs/verification.md)。测试与脚本化真实宿主验证不能冒充真实模型收益或生产验证。
 
-## 开发与发布
-
-本公开仓库只保存审核后的 Engineering Preview 发布快照，使用独立 Git 历史。[私有研发仓库](https://github.com/yuan-ww/universal-development-guardrails-dev)保留开发分支、内部 PR 和实验材料，仅授权成员可访问。
-
-更新顺序：私有研发与验证 → 选定版本 → 提取并审阅发布文件 → 在公开仓库现有历史上提交新快照。不要将研发仓库的分支、Git 对象、内部实验或原始日志推入此仓库，不使用 mirror push。必要校验在发布前完成；不把历史公开内容视为已被互联网撤回。
-
-开发克隆只配置指向私有仓库的 `dev` remote；发布克隆只配置指向本仓库的 `publish` remote。两者都禁用无目标的默认 push，使用显式 remote 和 refspec，例如开发时 `git push dev HEAD:feature-name`，发布时 `git push publish main:main`。不在研发工作树中直接生成发布提交。
 
 ## 许可证
 
