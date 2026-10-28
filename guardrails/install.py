@@ -9,14 +9,21 @@ import shlex
 import shutil
 import sys
 import tempfile
+from copy import deepcopy
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
-from .policy import Invalid, Policy, default_policy, parse_json, within
+from .policy import LIMIT, Invalid, Policy, default_policy, parse_json, within
 
 PENDING = ".udg-installing"
+MIGRATION = "migration.json"
 SKILL_NAME = "universal-development-guardrails"
-SKILL_FILES = ("SKILL.md", "references/risk-boundaries.md", "LICENSE")
+SKILL_FILES = (
+    "SKILL.md",
+    "references/human-acceptance.md",
+    "references/risk-boundaries.md",
+    "LICENSE",
+)
 SKILL_DIRECTORIES = {"codex": ".agents", "claude": ".claude", "cursor": ".cursor"}
 
 
@@ -82,10 +89,14 @@ def destination(path):
     return path
 
 
-def _build_bundle(staging: Path, target: Path, workspace: Path, mode):
+def _build_bundle(staging: Path, target: Path, workspace: Path, mode, policy_data=None,
+                  migration=None):
     """Build privately; commands refer to the final path, never the temporary one."""
-    data = default_policy(workspace, mode)
-    data["protected_paths"].append(str(target))
+    data = deepcopy(policy_data) if policy_data is not None else default_policy(workspace, mode)
+    paths = data.get("protected_paths", [".git", ".codex", ".claude", ".cursor", ".guardrails"])
+    if not isinstance(paths, list):
+        raise Invalid("invalid_policy")
+    data["protected_paths"] = paths + [str(target)]
     Policy(data)
     package = staging / "guardrails"
     package.mkdir()
@@ -119,6 +130,8 @@ def _build_bundle(staging: Path, target: Path, workspace: Path, mode):
         snippet = {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [handler]}]}}
         (staging / (platform + "-hooks.json")).write_text(
             json.dumps(snippet, indent=2) + "\n", encoding="utf-8")
+    if migration is not None:
+        (staging / MIGRATION).write_text(json.dumps(migration, indent=2) + "\n", encoding="utf-8")
     _write_manifest(staging)
 
 
@@ -143,12 +156,66 @@ def _rollback(target, owned_files, owned_dirs):
             pass
 
 
-def install(target: Path, workspace: Path, mode="OBSERVE"):
+def install(target: Path, workspace: Path, mode="ADAPTIVE"):
     target = destination(target)
     workspace = workspace.resolve()
     Policy(default_policy(workspace, mode))
     return _create_bundle(target, lambda staging: _build_bundle(staging, target, workspace, mode),
                           lambda: Policy.load(target / "policy.json"))
+
+
+def _migration_policy(source):
+    validate_installation(source)
+    source = destination(source)
+    with (source / "policy.json").open(encoding="utf-8") as stream:
+        original = parse_json(stream.read(LIMIT + 1))
+    policy = Policy(original)
+    if original["version"] != 1 or original["mode"] not in {"OBSERVE", "PROTECT", "STRICT"}:
+        raise Invalid("legacy_policy_required")
+    data = default_policy(policy.root, "ADAPTIVE")
+    for name in ("protected_paths", "sensitive_names", "category_decisions", "rules",
+                 "development_commands"):
+        if name in original:
+            data[name] = original[name]
+    return data, source, digest(source / "policy.json")
+
+
+def migrate(source: Path, target: Path):
+    """Create a separate Adaptive bundle; never activate or alter the old one."""
+    data, source, source_digest = _migration_policy(source)
+    target = destination(target)
+    if target == source:
+        raise Invalid("migration_destination_matches_source")
+    migration = {"version": 1, "source": str(source), "source_policy_sha256": source_digest,
+                 "rollback": "remove_this_bundle_and_restore_the_previous_manual_hook_entry"}
+    return _create_bundle(target,
+                          lambda staging: _build_bundle(staging, target, Path(data["workspace_root"]),
+                                                        "ADAPTIVE", data, migration),
+                          lambda: Policy.load(target / "policy.json"))
+
+
+def verify_migration(target: Path):
+    target = destination(target)
+    validate_installation(target)
+    try:
+        with (target / MIGRATION).open(encoding="utf-8") as stream:
+            data = parse_json(stream.read(LIMIT + 1))
+    except OSError as exc:
+        raise Invalid("migration_unavailable") from exc
+    if (not isinstance(data, dict) or set(data) !=
+            {"version", "source", "source_policy_sha256", "rollback"} or
+            data.get("version") != 1 or not isinstance(data["source"], str) or
+            not isinstance(data["source_policy_sha256"], str) or
+            not isinstance(data["rollback"], str)):
+        raise Invalid("invalid_migration")
+    return data
+
+
+def rollback_migration(target: Path):
+    """Remove only a verified migration bundle; prior host configuration is untouched."""
+    data = verify_migration(target)
+    uninstall(target)
+    return data
 
 
 def default_destination(workspace):

@@ -130,7 +130,7 @@ class QuickInstallTests(unittest.TestCase):
         data = json.loads(result.stdout)
         target = self.root / ".guardrails" / "udg-bundle"
         self.assertEqual(Path(data["destination"]), target)
-        self.assertEqual(data["mode"], "OBSERVE")
+        self.assertEqual(data["mode"], "ADAPTIVE")
         self.assertEqual(data["activation"], "manual_hook_merge_and_trust_required")
         self.assertTrue(installer.validate_installation(target))
         self.assertEqual((target / "LICENSE").read_bytes(), installer.asset("LICENSE").read_bytes())

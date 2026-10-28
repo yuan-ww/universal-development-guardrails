@@ -9,8 +9,9 @@ from pathlib import Path
 
 from .evaluation import evaluate_traces
 from .hooks import hook_main, worker
-from .install import (SKILL_DIRECTORIES, default_destination, install, install_skill, uninstall,
-                      uninstall_skill, validate_installation, verify_skill)
+from .install import (SKILL_DIRECTORIES, default_destination, install, install_skill, migrate,
+                      rollback_migration, uninstall, uninstall_skill, validate_installation,
+                      verify_migration, verify_skill)
 from .policy import LIMIT, MODES, Operation, Policy, error_decision, parse_json
 
 
@@ -29,13 +30,19 @@ def parser():
     p.add_argument("--destination", type=Path,
                    help="new bundle directory; default: WORKSPACE/.guardrails/udg-bundle")
     p.add_argument("--workspace", type=Path, required=True)
-    p.add_argument("--mode", choices=sorted(MODES), default="OBSERVE",
-                   help="first-install default: OBSERVE (audit only); PROTECT/STRICT are opt-in")
+    p.add_argument("--mode", choices=sorted(MODES), default="ADAPTIVE",
+                   help="first-install default: ADAPTIVE; legacy modes are compatibility options")
     for name in ("install-skill", "verify-skill", "uninstall-skill"):
         p = sub.add_parser(name, help="project-local text Skill only; no runtime or hooks")
         p.add_argument("--workspace", type=Path, required=True)
         p.add_argument("--agent", choices=sorted(SKILL_DIRECTORIES), default="codex")
     for name in ("uninstall", "verify-install"):
+        p = sub.add_parser(name)
+        p.add_argument("--destination", type=Path, required=True)
+    p = sub.add_parser("migrate")
+    p.add_argument("--source", type=Path, required=True, help="verified legacy bundle; never modified")
+    p.add_argument("--destination", type=Path, required=True, help="new Adaptive bundle directory")
+    for name in ("verify-migration", "rollback-migration"):
         p = sub.add_parser(name)
         p.add_argument("--destination", type=Path, required=True)
     p = sub.add_parser("evaluate-scenarios")
@@ -67,6 +74,18 @@ def main(argv=None):
         elif args.command == "install":
             target = args.destination or default_destination(args.workspace)
             args.destination = install(target, args.workspace, args.mode)
+        elif args.command == "migrate":
+            args.destination = migrate(args.source, args.destination)
+        elif args.command == "verify-migration":
+            output = {"ok": True, "command": args.command,
+                      "migration": verify_migration(args.destination)}
+            print(json.dumps(output))
+            return 0
+        elif args.command == "rollback-migration":
+            output = {"ok": True, "command": args.command,
+                      "migration": rollback_migration(args.destination)}
+            print(json.dumps(output))
+            return 0
         elif args.command in {"install-skill", "verify-skill", "uninstall-skill"}:
             action = {"install-skill": install_skill, "verify-skill": verify_skill,
                       "uninstall-skill": uninstall_skill}[args.command]
@@ -85,6 +104,9 @@ def main(argv=None):
             output["activation"] = "manual_hook_merge_and_trust_required"
             output["hook_configs"] = {platform: str(args.destination / (platform + "-hooks.json"))
                                       for platform in ("codex", "claude")}
+        if args.command == "migrate":
+            output["destination"] = str(args.destination)
+            output["activation"] = "manual_hook_merge_required;_legacy_bundle_unchanged"
         print(json.dumps(output))
         return 0
     except Exception:

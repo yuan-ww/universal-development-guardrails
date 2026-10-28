@@ -10,11 +10,12 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 
 LIMIT = 1_048_576
-DECISIONS = {"ALLOW", "DENY", "REQUIRE_APPROVAL"}
-MODES = {"OBSERVE", "PROTECT", "STRICT"}
+RULE_DECISIONS = {"ALLOW", "DENY", "REQUIRE_APPROVAL"}
+DECISIONS = RULE_DECISIONS | {"UNKNOWN"}
+MODES = {"ADAPTIVE", "OBSERVE", "PROTECT", "STRICT"}
 KINDS = {"read", "write", "delete", "git", "development", "execute", "external", "production", "unknown"}
 CATEGORIES = {"destructive_git", "data_destruction", "external", "production", "opaque_execution"}
-RANK = {"ALLOW": 0, "REQUIRE_APPROVAL": 1, "DENY": 2}
+RANK = {"ALLOW": 0, "UNKNOWN": 0, "REQUIRE_APPROVAL": 1, "DENY": 2}
 ID = re.compile(r"[a-z][a-z0-9_.-]{0,63}\Z")
 
 
@@ -123,10 +124,12 @@ class Policy:
         fields = {"version", "mode", "workspace_root", "protected_paths", "sensitive_names",
                   "category_decisions", "rules", "development_commands"}
         if (not isinstance(data, dict) or set(data) - fields or
-                type(data.get("version")) is not int or data["version"] != 1):
+                type(data.get("version")) is not int or data["version"] not in {1, 2}):
             raise Invalid("invalid_policy")
         if not isinstance(data.get("mode"), str) or data["mode"] not in MODES:
             raise Invalid("invalid_mode")
+        if (data["version"] == 1) != (data["mode"] != "ADAPTIVE"):
+            raise Invalid("invalid_policy_version")
         root = data.get("workspace_root")
         if not isinstance(root, str) or not Path(root).is_absolute():
             raise Invalid("absolute_workspace_required")
@@ -164,7 +167,7 @@ class Policy:
             if (not isinstance(ident, str) or not ID.fullmatch(ident) or ident in ids or
                     ident.startswith("system.") or type(priority) is not int or
                     not 0 <= priority <= 499 or not isinstance(rule.get("decision"), str) or
-                    rule["decision"] not in DECISIONS):
+                    rule["decision"] not in RULE_DECISIONS):
                 raise Invalid("invalid_rule")
             kinds = strings(rule.get("kinds", []))
             cats = strings(rule.get("categories", []))
@@ -214,7 +217,9 @@ class Policy:
                                          for p in self.protected):
                 add(900, "DENY", "system.protected", "Protected resource modification is denied")
         if op.kind == "unknown":
-            add(700, "DENY" if self.mode == "STRICT" else "REQUIRE_APPROVAL",
+            unknown_decision = ("UNKNOWN" if self.mode == "ADAPTIVE" else
+                                "DENY" if self.mode == "STRICT" else "REQUIRE_APPROVAL")
+            add(700, unknown_decision,
                 "system.unknown", "Operation is not reliably classified")
         categories = set(op.categories)
         categories.update({"delete": ["data_destruction"], "external": ["external"],
@@ -232,11 +237,14 @@ class Policy:
         finalists = sorted((c for c in candidates if c[0] == priority), key=lambda c: c[2])
         result = max(finalists, key=lambda c: RANK[c[1]])
         ids = tuple(c[2] for c in finalists if c[1] == result[1])
-        effective = "ALLOW" if self.mode == "OBSERVE" else result[1]
+        effective = result[1]
+        if self.mode == "OBSERVE" or (self.mode == "ADAPTIVE" and result[1] == "UNKNOWN"):
+            effective = "ALLOW"
         return Decision(result[1], effective, result[3], ids, self.mode)
 
 
 def default_policy(root: Path, mode="PROTECT"):
-    return {"version": 1, "mode": mode, "workspace_root": str(root.resolve()),
+    return {"version": 2 if mode == "ADAPTIVE" else 1, "mode": mode,
+            "workspace_root": str(root.resolve()),
             "protected_paths": [".git", ".codex", ".claude", ".cursor", ".guardrails"],
             "rules": [], "development_commands": []}

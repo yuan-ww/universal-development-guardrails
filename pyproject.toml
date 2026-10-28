@@ -18,7 +18,10 @@ packages = ["guardrails"]
 
 [tool.setuptools.data-files]
 "share/universal-development-guardrails" = ["SKILL.md", "LICENSE"]
-"share/universal-development-guardrails/references" = ["references/risk-boundaries.md"]
+"share/universal-development-guardrails/references" = [
+  "references/human-acceptance.md",
+  "references/risk-boundaries.md",
+]
 
 [tool.ruff]
 target-version = "py311"

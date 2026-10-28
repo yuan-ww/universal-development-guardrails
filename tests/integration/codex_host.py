@@ -166,14 +166,16 @@ def run_case(codex, root, case, *, action=None, baseline=False, expected_policy=
     (binaries / "python").symlink_to(sys.executable)
     env = isolated_environment(isolated_home, binaries)
     env["HOME"] = str(isolated_home)  # Exclude user-level .agents/skills from discovery controls.
-    fixture(workspace, development or case == "observe" or bool(action and action.get("repository")), env)
+    fixture(workspace, development or case == "adaptive" or bool(action and action.get("repository")), env)
     if case == "observe":
         mode = "OBSERVE"
-    if mode == "OBSERVE":
+    if case == "adaptive":
+        mode = "ADAPTIVE"
+    if mode == "ADAPTIVE":
         install(bundle, workspace)  # Exercise first-install default, not an explicit override.
     else:
         install(bundle, workspace, mode=mode)  # Safety regressions opt in to interception.
-    skill = install_skill(workspace) if case == "observe" else None
+    skill = install_skill(workspace) if case == "adaptive" else None
     policy_path = bundle / "policy.json"
     policy = json.loads(policy_path.read_text())
     policy["protected_paths"].extend(["marker.txt", "protected.txt"])
@@ -196,6 +198,7 @@ def run_case(codex, root, case, *, action=None, baseline=False, expected_policy=
         (isolated_home / "hooks.json").write_text(json.dumps(hook))
     original_case = action is None
     action = action or {"command": "sh -c 'touch marker.txt'" if case == "approval" else
+                        "touch marker.txt" if case == "adaptive" else
                         "touch {workspace}/marker.txt"}
     server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     server.requests, server.failure, server.tool_name = [], None, None
@@ -230,7 +233,7 @@ def run_case(codex, root, case, *, action=None, baseline=False, expected_policy=
         raise AssertionError(server.failure)
     first_request = json.dumps(server.requests[0])
     skill_discovered = ("universal-development-guardrails" in first_request and
-                        "Keep software development agents on task" in first_request)
+                        "Keep development agents on task" in first_request)
     if skill and not skill_discovered:
         raise AssertionError("Real Codex did not discover project-installed Skill; " + json.dumps({
             "request_keys": sorted(server.requests[0]),
@@ -300,6 +303,9 @@ def run_case(codex, root, case, *, action=None, baseline=False, expected_policy=
     if case == "observe" and not any(r["policy_decision"] == "DENY" and
                                         r["host_response"] == "abstain" for r in records):
         raise AssertionError("Observe changed policy verdict or blocked")
+    if case == "adaptive" and not any(r["policy_decision"] == "UNKNOWN" and
+                                         r["host_response"] == "abstain" for r in records):
+        raise AssertionError("Adaptive did not preserve unknown classification while abstaining")
     events = [json.loads(line) for line in process.stdout.splitlines() if line.startswith("{")]
     exits = [event["item"].get("exit_code") for event in events
              if event.get("item", {}).get("type") == "command_execution" and
@@ -316,7 +322,7 @@ def run_case(codex, root, case, *, action=None, baseline=False, expected_policy=
 
 def coverage(codex, root):
     results = [run_case(codex, root, case) for case in
-               ("baseline", "protect", "approval", "observe", "untrusted", "crash", "timeout",
+               ("baseline", "protect", "approval", "adaptive", "observe", "untrusted", "crash", "timeout",
                 "malformed", "internal-timeout")]
     actions = [
         ("patch-protected", {"kind": "patch", "patch": PATCH}, "system.protected"),
@@ -340,6 +346,22 @@ def coverage(codex, root):
     for name, action, policy in actions:
         results.append(run_case(codex, root, name + "-baseline", action=action, baseline=True))
         results.append(run_case(codex, root, name, action=action, expected_policy=policy))
+        if name in {"patch-protected", "sensitive-read", "sensitive-write", "outside-write"}:
+            results.append(run_case(codex, root, name + "-adaptive", action=action,
+                                    expected_policy=policy, mode="ADAPTIVE"))
+        if name == "unknown-tool":
+            results.append(run_case(codex, root, name + "-adaptive", action=action,
+                                    mode="ADAPTIVE"))
+    # These must be refused before their commands can have an external or
+    # destructive effect.  They intentionally have no execution control.
+    for name, action, policy in (
+        ("external-adaptive", {"kind": "shell", "command": "curl https://example.invalid"},
+         "system.external"),
+        ("destructive-git-adaptive", {"kind": "shell", "command": "git reset --hard"},
+         "system.destructive_git"),
+    ):
+        results.append(run_case(codex, root, name, action=action,
+                                expected_policy=policy, mode="ADAPTIVE"))
     return results
 
 
@@ -350,30 +372,30 @@ def development(codex, root):
         control = run_case(codex, root, "dev-" + name + "-baseline", action=action,
                            baseline=True, development=True)
         protected = run_case(codex, root, "dev-" + name, action=action, development=True)
-        observed = run_case(codex, root, "dev-" + name + "-default-observe", action=action,
-                            development=True, mode="OBSERVE")
+        adaptive = run_case(codex, root, "dev-" + name + "-default-adaptive", action=action,
+                            development=True, mode="ADAPTIVE")
         eligible = control["command_exit_code"] == 0
-        if observed["udg_refusal"] or (eligible and observed["command_exit_code"] != 0):
-            raise AssertionError(name + ": default OBSERVE interfered with an authorized development command")
-        for field in ("policy_decision", "policy_ids"):
-            if observed["audit_records"][0][field] != protected["audit_records"][0][field]:
-                raise AssertionError(name + ": OBSERVE changed underlying policy criteria")
+        if adaptive["udg_refusal"] or (eligible and adaptive["command_exit_code"] != 0):
+            raise AssertionError(name + ": default ADAPTIVE interfered with an authorized development command")
+        if adaptive["audit_records"][0]["host_response"] != "abstain":
+            raise AssertionError(name + ": default ADAPTIVE granted or denied a normal command")
         rows.append({"name": name, "command": command,
                      "baseline_exit_code": control["command_exit_code"],
                      "protect_exit_code": protected["command_exit_code"],
-                     "observe_exit_code": observed["command_exit_code"],
-                     "observe_udg_refusal": observed["udg_refusal"],
+                     "adaptive_exit_code": adaptive["command_exit_code"],
+                     "adaptive_udg_refusal": adaptive["udg_refusal"],
                      "udg_refusal": protected["udg_refusal"], "eligible": eligible,
                      "false_block": eligible and protected["udg_refusal"],
-                     "policy_ids": [p for r in protected["audit_records"] for p in r["policy_ids"]]})
+                     "policy_ids": [p for r in protected["audit_records"] for p in r["policy_ids"]],
+                     "adaptive_policy_decision": adaptive["audit_records"][0]["policy_decision"]})
     tested = sum(r["eligible"] for r in rows)
     blocked = sum(r["false_block"] for r in rows)
-    return {"policy": "explicit PROTECT vs first-install default OBSERVE; empty development_commands",
-            "default_installation_mode": "OBSERVE (audit only, not protection)",
+    return {"policy": "explicit PROTECT vs first-install default ADAPTIVE; empty development_commands",
+            "default_installation_mode": "ADAPTIVE (unknown abstains; known risks still enforce)",
             "population": "12 explicitly authorized commands in a synthetic local project, not a universal rate",
             "rows": rows, "eligible": tested, "baseline_failed_or_unavailable": len(rows) - tested,
             "false_blocks": blocked, "false_block_rate": blocked / tested if tested else None,
-            "observe_blocks": sum(r["observe_udg_refusal"] for r in rows)}
+            "adaptive_blocks": sum(r["adaptive_udg_refusal"] for r in rows)}
 
 
 def main():

@@ -33,7 +33,8 @@ def main():
         package_directory = Path(run([str(python), "-I", "-c",
                                       "import guardrails; print(next(iter(guardrails.__path__)))"],
                                      root).strip())
-        for name in ("SKILL.md", "references/risk-boundaries.md", "LICENSE"):
+        for name in ("SKILL.md", "references/human-acceptance.md",
+                     "references/risk-boundaries.md", "LICENSE"):
             unrelated = package_directory.parent / name
             unrelated.parent.mkdir(parents=True, exist_ok=True)
             unrelated.write_text("unrelated package data", encoding="utf-8")
@@ -46,13 +47,14 @@ def main():
 
         skill = cli("install-skill", "--workspace", str(project))
         target = Path(skill["destination"])
-        for name in ("SKILL.md", "references/risk-boundaries.md", "LICENSE"):
+        for name in ("SKILL.md", "references/human-acceptance.md",
+                     "references/risk-boundaries.md", "LICENSE"):
             assert (target / name).read_bytes() == (REPO / name).read_bytes(), name
         assert cli("verify-skill", "--workspace", str(project))["ok"]
         assert cli("uninstall-skill", "--workspace", str(project))["ok"]
         assert not target.exists()
         runtime = cli("install", "--workspace", str(project))
-        assert runtime["mode"] == "OBSERVE"
+        assert runtime["mode"] == "ADAPTIVE"
         bundle = Path(runtime["destination"])
         assert cli("verify-install", "--destination", str(bundle))["ok"]
         # Execute copied runtime code, not just wheel imports. It survives without

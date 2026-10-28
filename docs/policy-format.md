@@ -1,11 +1,11 @@
-# Policy format v1
+# Policy format v1 / v2
 
 校验实现以 `guardrails/policy.py` 为准：无 YAML、动态表达式或 eval。JSON 拒绝重复键、非有限数字、过深和超过 1 MiB 的输入。未知字段/类别、无效策略或输入均保守拒绝，不回显原文。
 
 | 配置字段 | 类型和默认值 |
 |---|---|
-| version | 整数 1，必填 |
-| mode | OBSERVE / PROTECT / STRICT，必填 |
+| version | 整数 1（遗留模式）或 2（Adaptive），必填 |
+| mode | v1 为 OBSERVE / PROTECT / STRICT；v2 只能为 ADAPTIVE，必填 |
 | workspace_root | 存在的绝对目录，不能为文件系统根，必填 |
 | protected_paths | 路径数组，默认 .git/.codex/.claude/.cursor/.guardrails；相对根解析；替换数组需保留想继续保护的项 |
 | sensitive_names | 精确路径组件数组，默认 .env/.ssh/.aws/credentials/id_rsa/id_ed25519；另外始终匹配 .env. 前缀组件；不是完整凭据识别器 |
@@ -13,7 +13,7 @@
 | development_commands | 完整 argv 数组，默认空；仅由受信配置预审 |
 | rules | 至多 256 条规则，默认空 |
 
-安装 CLI / install API 省略 mode 时生成 OBSERVE。已有策略不迁移，JSON 的 mode 仍必填；PROTECT / STRICT 需显式选择。本轮不改变引擎规则优先级、归一化或允许列表。底层 default_policy 辅助函数仍默认构造 PROTECT，安装器显式传入所选模式，不代表首次安装默认值。
+安装 CLI / install API 省略 mode 时生成 v2 ADAPTIVE。已有 v1 策略不重解释、不自动迁移；使用 `migrate` 才会创建独立 v2 bundle。遗留模式仍可显式选择。本轮不扩大 Shell 语法或 development_commands 允许列表。底层 `default_policy` 辅助函数仍默认构造 PROTECT，安装器显式传入 ADAPTIVE，不代表旧 API 的语义变化。
 
 敏感类别：destructive_git、data_destruction、external、production、opaque_execution。默认均 REQUIRE_APPROVAL；STRICT 的 opaque_execution 为 DENY。
 
@@ -27,12 +27,12 @@
 |---|---|
 | 900 | 敏感访问、保护资源修改及删除其祖先 |
 | 800 | cwd 或显式目标在工作区外 |
-| 700 | 未知操作，PROTECT 审批、STRICT 拒绝 |
+| 700 | 未知操作：ADAPTIVE 记录 UNKNOWN 并 Hook abstain；PROTECT 审批、STRICT 拒绝 |
 | 600 | 敏感操作类别 |
 | 0–499 | 配置规则 |
 | 0 | 常规 scoped 操作默认 ALLOW |
 
-无效配置/输入直接 DENY、mode=UNKNOWN。正常 OBSERVE 保留 policy_decision，只将 effective_decision 设为 ALLOW，不产生宿主授权。
+无效配置/输入直接 DENY。`UNKNOWN` 不是可配置规则 decision，也不是有效 CLI 执行许可；仅当 v2 ADAPTIVE 缺少可信分类时产生。其 Hook effective result 为空 abstain，不产生宿主授权。正常 OBSERVE 保留 policy_decision，只将 effective_decision 设为 ALLOW，不产生宿主授权。
 
 ## 结构化操作
 
@@ -44,4 +44,4 @@ kind 必须为 read/write/delete/git/development/execute/external/production/unk
 
 本机 Path.resolve 解析 `..` 和现有 symlink 后按组件判断；外来 OS 路径无法解释时拒绝。判断后路径可能变化，不替代内核权限。Shell 仅接受窄语法；组合、重定向、替换、转义、glob 和未知程序/参数进入 unknown，允许误拦截也不假装理解完整语义。
 
-通用 API 的 cwd 是可信调用方提供的上下文，不意味着宿主总能提供实际工具目录。Codex 0.160.0 的 Bash 只有 command 和会话 cwd，实际 workdir 缺失；相对路径、无绝对 `-C` 的 Git 和依赖 cwd 的 development_commands 归为 unknown。精确 argv 不能补足缺失上下文或隐式授权。窄语法支持绝对 cat/touch/ls 参数及一个绝对 `git -C`；并未通用地允许 Git 全局参数或 Shell 组合。
+通用 API 的 cwd 是可信调用方提供的上下文，不意味着宿主总能提供实际工具目录。已测的 Codex 0.160.0 与 0.164.0-alpha.11.1 Bash 均没有向适配器传入可信实际 workdir；相对路径、无绝对 `-C` 的 Git 和依赖 cwd 的 development_commands 归为 unknown。精确 argv 不能补足缺失上下文或隐式授权。窄语法支持绝对 cat/touch/ls 参数及一个绝对 `git -C`；并未通用地允许 Git 全局参数或 Shell 组合。

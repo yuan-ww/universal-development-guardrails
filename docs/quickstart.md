@@ -1,6 +1,6 @@
 # 快速安装、验证与卸载
 
-这是 Engineering Preview，不是正式 Release，也未提供 PyPI / pipx / npx 分发承诺。安装器不自动配置或信任 Hook，不修改用户全局设置，不创建后台服务。默认 OBSERVE 只有观察能力。
+这是 Engineering Preview，不是正式 Release，也未提供 PyPI / pipx / npx 分发承诺。安装器不自动配置或信任 Hook，不修改用户全局设置，不创建后台服务。新 bundle 默认为 Adaptive；未知操作只审计并交回宿主，不等于安全放行。
 
 ## 1. 获取源码
 
@@ -21,7 +21,7 @@ python3.11 -I universal-development-guardrails/guardrails/runner.py install-skil
 python3.11 -I universal-development-guardrails/guardrails/runner.py verify-skill --workspace "/absolute/path/to/your-project"
 ```
 
-默认目标为 `.agents/skills/universal-development-guardrails/`，包含未改写的 SKILL.md、references/risk-boundaries.md、LICENSE 和 manifest.json。与现有目录冲突会失败，不覆盖、不自动更新。校验只证明安装文件与清单一致，不是签名、受信证明或宿主加载证明。
+默认目标为 `.agents/skills/universal-development-guardrails/`，包含未改写的 SKILL.md、references/risk-boundaries.md、references/human-acceptance.md、LICENSE 和 manifest.json。与现有目录冲突会失败，不覆盖、不自动更新。校验只证明安装文件与清单一致，不是签名、受信证明或宿主加载证明。
 
 在目标项目启动 Codex，检查 `/skills`，显式调用 `$universal-development-guardrails`。按[官方发现规则](https://learn.chatgpt.com/docs/build-skills)，项目目录和启动位置影响发现；本轮真实发现验证是在隔离 Git 项目中检查模型收到的 Skill 名称/描述，并有未安装对照。不声称验证了模型遵守效果。首次未显示时重启、检查启动项目与是否被禁用；安装器不会自动修改全局开关。
 
@@ -35,14 +35,14 @@ python3.11 -I universal-development-guardrails/guardrails/runner.py uninstall-sk
 
 仅移除完全匹配的副本；有用户修改、额外文件/空目录、symlink 或未完成标记时拒绝。父级 skills 目录及其他 Skill 不删除。手工安装且没有清单的目录不交给此命令删除；先备份并自行处理。
 
-## 2B. 可选：生成观察运行时
+## 2B. 可选：生成 Adaptive 运行时
 
 ```sh
 python3.11 -I universal-development-guardrails/guardrails/runner.py install --workspace "/absolute/path/to/your-project"
 python3.11 -I universal-development-guardrails/guardrails/runner.py verify-install --destination "/absolute/path/to/your-project/.guardrails/udg-bundle"
 ```
 
-默认 `mode=OBSERVE`，目标 `.guardrails/udg-bundle`；成功 JSON 列出实际 destination、mode、hook_configs，并标明手动启用要求。省略目标的快捷方式拒绝 `.guardrails` symlink，避免默默转向其他目录。自定义位置仍使用显式 `--destination`，PROTECT / STRICT 仍需显式 `--mode`，不会自动降低已有模式。
+默认 `mode=ADAPTIVE`，目标 `.guardrails/udg-bundle`；成功 JSON 列出实际 destination、mode、hook_configs，并标明手动启用要求。省略目标的快捷方式拒绝 `.guardrails` symlink，避免默默转向其他目录。自定义位置仍使用显式 `--destination`；遗留 OBSERVE / PROTECT / STRICT 仍可显式 `--mode`，不会自动降低或重写已有模式。
 
 生成 bundle **不等于启用 Hook**。按 [README 的平台步骤](../README.md#启用-hook)备份现有配置、人工合并所选 Hook、检查信任和重新启动。不替换宿主原有 Sandbox / 审批设置；不要通过 trust bypass、allow 白名单或敏感实物试验来加速部署。安装器不声称已验证你的实际宿主环境。
 
@@ -54,7 +54,7 @@ python3.11 -I universal-development-guardrails/guardrails/runner.py verify-insta
 python3.11 -I universal-development-guardrails/guardrails/runner.py uninstall --destination "/absolute/path/to/your-project/.guardrails/udg-bundle"
 ```
 
-修改过的文件不会被静默删除，审计目录不会删除；`.guardrails` 父目录也保留。OBSERVE 不额外保护敏感/越界/危险操作；PROTECT 的上下文缺口与误拦截、外层 fail-open 仍存在，见[安全模型](security-model.md)。
+修改过的文件不会被静默删除，审计目录不会删除；`.guardrails` 父目录也保留。Adaptive 会拒绝已识别的敏感/越界/高风险操作，但对缺失可信实际目录的未知调用 abstain；外层 fail-open 与上下文缺口仍存在，见[安全模型](security-model.md)。
 
 ## 3. 可选：安装 Python 包后使用 udg
 
@@ -73,6 +73,7 @@ Windows 使用 `.venv\Scripts\python.exe` 和 `.venv\Scripts\udg.exe`。真实 w
 
 - Python 版本不满足：选择已安装的 3.11+；安装器不会下载 Python 或改系统 PATH。
 - 目录已经存在：不要加覆盖参数或先删除用户目录。先保存修改，校验已有安装；要更换版本/模式，选择新 bundle 目录并按 README 显式切换 Hook。
+- 遗留 bundle 迁移：执行 `migrate --source OLD --destination NEW`，再 `verify-migration --destination NEW`。安装器不改旧 bundle 或任何 Hook；确认后人工切换 Hook。需要回退时先切回旧 Hook，再运行 `rollback-migration --destination NEW`，它仅删除未修改且已验证的迁移 bundle。
 - 文件校验失败 / `.udg-installing`：不要启用残留目录。先保存用户文件，再人工处理或选新目录；没有不检查内容的自动清理。
 - Skill 更新：先确认副本未经修改并用 uninstall-skill 保守卸载，再安装审阅过的新版本。自定义副本先备份或选择独立项目，不静默覆盖。
 - 运行时失效：停用相应 Hook、保留证据，检查 Python 路径、配置来源及信任。不要把无审计或安装成功当作保护已生效。

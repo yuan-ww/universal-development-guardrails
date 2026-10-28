@@ -67,6 +67,9 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual(d.effective_decision, expected)
             self.assertTrue(d.policy_ids)
             self.assertTrue(d.reason)
+        adaptive = Policy(self.data | {"version": 2, "mode": "ADAPTIVE"})
+        d = adaptive.evaluate(Operation("unknown", self.root))
+        self.assertEqual((d.policy_decision, d.effective_decision), ("UNKNOWN", "ALLOW"))
         self.policy = Policy(self.data | {"mode": "OBSERVE"})
         d = self.decision(paths=(".env",))
         self.assertEqual((d.policy_decision, d.effective_decision), ("DENY", "ALLOW"))
@@ -90,7 +93,7 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(self.decision("read", ("docs/a",)).effective_decision, "ALLOW")
 
     def test_invalid_policies(self):
-        bad = [{"mode": "wat"}, {"version": 2}, {"workspace_root": "/"},
+        bad = [{"mode": "wat"}, {"version": 2}, {"mode": "ADAPTIVE"}, {"workspace_root": "/"},
                {"workspace_root": "relative"}, {"approved": True},
                {"category_decisions": {"production": "ALLOW"}},
                {"rules": [{"id": "x", "priority": 500, "decision": "ALLOW", "kinds": ["write"]}]},
@@ -176,6 +179,19 @@ class PolicyTests(unittest.TestCase):
             op = normalize(event, "codex", self.policy)
             self.assertEqual(op.kind, "unknown")
             self.assertNotEqual(self.policy.evaluate(op).effective_decision, "ALLOW")
+
+    def test_adaptive_unknown_abstains_without_becoming_safe(self):
+        policy = Policy(self.data | {"version": 2, "mode": "ADAPTIVE"})
+        event = {"hook_event_name": "PreToolUse", "cwd": str(self.root), "tool_name": "Bash",
+                 "tool_input": {"command": "git status --short"}}
+        decision = policy.evaluate(normalize(event, "codex", policy))
+        self.assertEqual(decision.policy_decision, "UNKNOWN")
+        self.assertEqual(decision.effective_decision, "ALLOW")
+        self.assertEqual(decision.policy_ids, ("system.unknown",))
+        self.assertEqual(policy.evaluate(Operation.from_dict({"kind": "read", "paths": [".env"]},
+                                                             self.root)).effective_decision, "DENY")
+        self.assertEqual(policy.evaluate(Operation.from_dict({"kind": "external"}, self.root)).effective_decision,
+                         "REQUIRE_APPROVAL")
 
     def test_absolute_operands_work_without_execution_cwd(self):
         root = self.root.as_posix()
