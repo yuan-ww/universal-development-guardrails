@@ -28,7 +28,8 @@ def shell(command: str, cwd: Path, policy: Policy, *, cwd_trusted=True) -> Opera
     if not argv or any("\x00" in a for a in argv):
         return unknown
     program, *args = argv
-    # Codex 0.160.0 drops exec_command.workdir from the canonical Bash input.
+    # In tested Codex 0.160.0 and 0.164.0-alpha.11.1, canonical Bash input
+    # does not provide a trustworthy exec_command.workdir.
     # Session cwd is not evidence of execution cwd. Only explicit absolute
     # operands (or a trustworthy host workdir extension) give scoped context.
     if program == "pwd" and not args:
@@ -113,8 +114,8 @@ def normalize(event, platform: str, policy: Policy) -> Operation:
         raise Invalid("invalid_cwd")
     cwd = canonical(event["cwd"], policy.root)
     if name == "Bash":
-        # Actual 0.160.0 event contains only `command`: do not substitute session
-        # cwd for execution cwd. Retain support for explicit host extensions.
+        # Tested Codex events provide no trustworthy actual workdir: do not
+        # substitute session cwd for execution cwd. Retain explicit extensions.
         cwd_trusted = platform != "codex" or "workdir" in args
         workdir = args.get("workdir", str(cwd))
         cwd = canonical(workdir, cwd)

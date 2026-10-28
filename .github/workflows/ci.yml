@@ -49,5 +49,5 @@ jobs:
         run: npm install --prefix "$RUNNER_TEMP/udg-host" @openai/codex@0.160.0
       - name: Real host coverage, including denials and fail-open counterexamples
         run: python tests/integration/codex_host.py --suite coverage --codex "$RUNNER_TEMP/udg-host/node_modules/.bin/codex"
-      - name: Development controls, explicit PROTECT and first-install default OBSERVE
+      - name: Development controls, explicit PROTECT and first-install default ADAPTIVE
         run: python tests/integration/codex_host.py --suite development --codex "$RUNNER_TEMP/udg-host/node_modules/.bin/codex"

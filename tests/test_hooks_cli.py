@@ -12,7 +12,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from guardrails.hooks import run
-from guardrails.install import install, uninstall, validate_installation, windows_command
+from guardrails.install import (install, migrate, rollback_migration, uninstall, validate_installation,
+                                verify_migration, windows_command)
 from guardrails.policy import Decision, Invalid, default_policy
 from guardrails.storage import audit, check_revision, revision
 
@@ -74,6 +75,17 @@ class HookTests(unittest.TestCase):
             record = json.loads(db.execute("SELECT record FROM decisions").fetchone()[0])
         self.assertEqual(record["policy_decision"], "DENY")
         self.assertEqual(record["host_response"], "abstain")
+
+    def test_adaptive_unknown_abstains_and_known_risks_keep_their_decision(self):
+        self.policy.write_text(json.dumps(default_policy(self.root, "ADAPTIVE")))
+        self.assertEqual(self.hook("codex", self.event(args={"command": "git status --short"})), {})
+        with closing(sqlite3.connect(self.audit / "decisions.sqlite3")) as db:
+            unknown = json.loads(db.execute("SELECT record FROM decisions").fetchone()[0])
+        self.assertEqual((unknown["policy_decision"], unknown["host_response"]), ("UNKNOWN", "abstain"))
+        command = shlex.join(["cat", (self.root / ".env").as_posix()])
+        denied = self.hook("codex", self.event(args={"command": command}))["hookSpecificOutput"]
+        self.assertEqual(denied["permissionDecision"], "deny")
+        self.assertIn("system.sensitive", denied["permissionDecisionReason"])
 
     def test_invalid_input_config_and_worker_failure_deny(self):
         for raw in ("", "{", "[]", '{"hook_event_name":"PostToolUse"}', "x" * 1048577):
@@ -162,7 +174,8 @@ class HookTests(unittest.TestCase):
     def test_install_verify_no_overwrite_uninstall(self):
         dest = self.root / "bundle space 'quoted'"
         install(dest, self.root)
-        self.assertEqual(json.loads((dest / "policy.json").read_text())["mode"], "OBSERVE")
+        policy = json.loads((dest / "policy.json").read_text())
+        self.assertEqual((policy["version"], policy["mode"]), (2, "ADAPTIVE"))
         self.assertTrue(validate_installation(dest))
         for platform in ("codex", "claude"):
             config = json.loads((dest / (platform + "-hooks.json")).read_text())
@@ -191,14 +204,14 @@ class HookTests(unittest.TestCase):
         self.assertFalse(dest.exists())
 
     def test_cli_install_default_and_explicit_modes_preserve_existing_bundle(self):
-        for mode in (None, "OBSERVE", "PROTECT", "STRICT"):
+        for mode in (None, "ADAPTIVE", "OBSERVE", "PROTECT", "STRICT"):
             with self.subTest(mode=mode):
                 dest = self.root / (mode or "default")
                 args = ["install", "--workspace", str(self.root), "--destination", str(dest)]
                 if mode:
                     args += ["--mode", mode]
                 process = self.cli(*args)
-                expected = mode or "OBSERVE"
+                expected = mode or "ADAPTIVE"
                 self.assertEqual(process.returncode, 0, process.stderr)
                 self.assertEqual(json.loads(process.stdout)["mode"], expected)
                 self.assertEqual(json.loads((dest / "policy.json").read_text())["mode"], expected)
@@ -208,6 +221,47 @@ class HookTests(unittest.TestCase):
                 self.assertEqual(retry.returncode, 2)
                 self.assertEqual(before, {p.relative_to(dest): p.read_bytes()
                                           for p in dest.rglob("*") if p.is_file()})
+
+    def test_migration_creates_separate_adaptive_bundle_and_rollback_preserves_legacy(self):
+        legacy, adaptive = self.root / "legacy", self.root / "adaptive"
+        install(legacy, self.root, "STRICT")
+        legacy_files = {p.relative_to(legacy): p.read_bytes() for p in legacy.rglob("*") if p.is_file()}
+        migrate(legacy, adaptive)
+        migration = verify_migration(adaptive)
+        self.assertEqual(migration["source"], str(legacy.resolve()))
+        policy = json.loads((adaptive / "policy.json").read_text())
+        self.assertEqual((policy["version"], policy["mode"]), (2, "ADAPTIVE"))
+        self.assertEqual(legacy_files, {p.relative_to(legacy): p.read_bytes()
+                                        for p in legacy.rglob("*") if p.is_file()})
+        self.assertTrue(validate_installation(legacy))
+        self.assertEqual(rollback_migration(adaptive)["source"], str(legacy.resolve()))
+        self.assertFalse(adaptive.exists())
+        self.assertTrue(validate_installation(legacy))
+
+    def test_migration_cli_verification_and_rollback(self):
+        legacy, adaptive = self.root / "legacy-cli", self.root / "adaptive-cli"
+        install(legacy, self.root, "PROTECT")
+        migrated = self.cli("migrate", "--source", str(legacy), "--destination", str(adaptive))
+        self.assertEqual(migrated.returncode, 0, migrated.stderr)
+        self.assertEqual(json.loads(migrated.stdout)["activation"],
+                         "manual_hook_merge_required;_legacy_bundle_unchanged")
+        verified = self.cli("verify-migration", "--destination", str(adaptive))
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+        self.assertEqual(json.loads(verified.stdout)["migration"]["source"], str(legacy.resolve()))
+        rolled_back = self.cli("rollback-migration", "--destination", str(adaptive))
+        self.assertEqual(rolled_back.returncode, 0, rolled_back.stderr)
+        self.assertFalse(adaptive.exists())
+        self.assertTrue(validate_installation(legacy))
+
+    def test_migration_rollback_refuses_a_modified_new_bundle(self):
+        legacy, adaptive = self.root / "legacy-modified", self.root / "adaptive-modified"
+        install(legacy, self.root, "OBSERVE")
+        migrate(legacy, adaptive)
+        (adaptive / "policy.json").write_text('{"user":"edit"}\n', encoding="utf-8")
+        with self.assertRaises(Invalid):
+            rollback_migration(adaptive)
+        self.assertTrue(adaptive.exists())
+        self.assertTrue(validate_installation(legacy))
 
     def test_uninstall_preserves_modified_files(self):
         dest = self.root / "bundle"
